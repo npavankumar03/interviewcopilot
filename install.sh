@@ -193,14 +193,24 @@ if [ -d "$INSTALL_DIR" ]; then
 fi
 
 git clone "$REPO_URL" "$INSTALL_DIR"
+
+# Verify clone succeeded
+if [ ! -d "$INSTALL_DIR" ]; then
+    print_error "Clone failed - directory not created"
+    exit 1
+fi
+
 cd "$INSTALL_DIR" || { print_error "Failed to enter directory"; exit 1; }
 
 print_success "Repository cloned to $INSTALL_DIR"
 
-# Verify package.json exists
+# Verify package.json exists (give a moment for filesystem)
+sleep 1
+
 if [ ! -f "package.json" ]; then
     print_error "package.json not found!"
-    print_error "Repository may not have cloned correctly"
+    print_error "Files in directory:"
+    ls -la
     exit 1
 fi
 
