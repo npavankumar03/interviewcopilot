@@ -152,18 +152,29 @@ print_success "Node.js $(node -v) is installed"
 if ! command_exists bun; then
     print_warning "Bun not found, installing..."
     curl -fsSL https://bun.sh/install | bash
-    export PATH="$HOME/.bun/bin:$PATH"
     
-    # Add to shell profile
+    # Add to shell profile (avoid duplicates)
     if [ -f "$HOME/.bashrc" ]; then
-        echo 'export PATH="$HOME/.bun/bin:$PATH"' >> "$HOME/.bashrc"
+        grep -q '.bun/bin' "$HOME/.bashrc" 2>/dev/null || \
+            echo 'export PATH="$HOME/.bun/bin:$PATH"' >> "$HOME/.bashrc"
     fi
     if [ -f "$HOME/.zshrc" ]; then
-        echo 'export PATH="$HOME/.bun/bin:$PATH"' >> "$HOME/.zshrc"
+        grep -q '.bun/bin' "$HOME/.zshrc" 2>/dev/null || \
+            echo 'export PATH="$HOME/.bun/bin:$PATH"' >> "$HOME/.zshrc"
     fi
 fi
-print_success "Bun is installed"
 
+# Ensure bun is in PATH for this session
+export PATH="$HOME/.bun/bin:$PATH"
+
+# Verify bun is available
+if ! command -v bun >/dev/null 2>&1; then
+    print_error "Bun installation failed"
+    print_error "Please install manually: curl -fsSL https://bun.sh/install | bash"
+    exit 1
+fi
+
+print_success "Bun is installed ($(bun -v))"
 print_success "All requirements met!"
 
 # ============================================
@@ -173,22 +184,27 @@ print_success "All requirements met!"
 print_step "Cloning Meeting Copilot repository..."
 
 INSTALL_DIR="${INSTALL_DIR:-$HOME/meeting-copilot}"
+REPO_URL="https://github.com/npavankumar03/interviewcopilot.git"
 
 if [ -d "$INSTALL_DIR" ]; then
     print_warning "Directory $INSTALL_DIR already exists"
-    read -p "Do you want to remove it and reinstall? (y/N): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        rm -rf "$INSTALL_DIR"
-    else
-        print_error "Installation cancelled"
-        exit 1
-    fi
+    print_warning "Remove it to reinstall fresh"
+    rm -rf "$INSTALL_DIR"
 fi
 
-git clone https://github.com/npavankumar03/interviewcopilot.git "$INSTALL_DIR"
-cd "$INSTALL_DIR"
+git clone "$REPO_URL" "$INSTALL_DIR"
+cd "$INSTALL_DIR" || { print_error "Failed to enter directory"; exit 1; }
+
 print_success "Repository cloned to $INSTALL_DIR"
+
+# Verify package.json exists
+if [ ! -f "package.json" ]; then
+    print_error "package.json not found!"
+    print_error "Repository may not have cloned correctly"
+    exit 1
+fi
+
+print_success "Found package.json"
 
 # ============================================
 # INSTALL DEPENDENCIES
@@ -196,12 +212,25 @@ print_success "Repository cloned to $INSTALL_DIR"
 
 print_step "Installing dependencies..."
 
-bun install
+print_msg "Working directory: $(pwd)" "$YELLOW"
+print_msg "Installing main dependencies..." "$YELLOW"
+
+# Use full path to bun
+BUN_BIN="$HOME/.bun/bin/bun"
+
+if [ ! -f "$BUN_BIN" ]; then
+    BUN_BIN="bun"
+fi
+
+"$BUN_BIN" install 2>&1 || { print_error "Failed to install main dependencies"; exit 1; }
 
 # Install realtime service dependencies
-cd mini-services/realtime-service
-bun install
-cd ../..
+if [ -d "mini-services/realtime-service" ]; then
+    print_msg "Installing realtime service dependencies..." "$YELLOW"
+    cd mini-services/realtime-service
+    "$BUN_BIN" install 2>&1 || { print_error "Failed to install realtime dependencies"; exit 1; }
+    cd "$INSTALL_DIR"
+fi
 
 print_success "Dependencies installed"
 
@@ -216,23 +245,29 @@ if [ ! -f ".env" ]; then
     print_success "Created .env file from template"
     
     # Generate a random JWT secret
-    JWT_SECRET=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p -c 32)
+    JWT_SECRET=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p -c 32 2>/dev/null || echo "change-me-$(date +%s)")
+    
     if [ -n "$JWT_SECRET" ]; then
-        sed -i "s/change-me-to-a-secure-random-string-in-production/$JWT_SECRET/" .env 2>/dev/null || \
-        sed -i '' "s/change-me-to-a-secure-random-string-in-production/$JWT_SECRET/" .env 2>/dev/null || \
-        print_warning "Could not set JWT secret automatically"
+        # Try different sed syntaxes for macOS/Linux
+        if sed -i "s/change-me-to-a-secure-random-string-in-production/$JWT_SECRET/" .env 2>/dev/null; then
+            print_success "JWT secret generated"
+        elif sed -i '' "s/change-me-to-a-secure-random-string-in-production/$JWT_SECRET/" .env 2>/dev/null; then
+            print_success "JWT secret generated"
+        else
+            print_warning "Could not set JWT secret automatically"
+        fi
     fi
     
     print_warning ""
-    print_warning "═══════════════════════════════════════════════════════════" "$YELLOW"
-    print_warning "  IMPORTANT: Edit .env file and add your API keys!" "$YELLOW"
-    print_warning "═══════════════════════════════════════════════════════════" "$YELLOW"
+    print_warning "═══════════════════════════════════════════════════════════" 
+    print_warning "  IMPORTANT: Edit .env file and add your API keys!" 
+    print_warning "═══════════════════════════════════════════════════════════"
     print_warning ""
-    print_warning "Required keys:" "$YELLOW"
-    print_warning "  - OPENAI_API_KEY or GEMINI_API_KEY (for LLM)" "$YELLOW"
-    print_warning "  - AZURE_SPEECH_KEY + AZURE_REGION (for STT, optional)" "$YELLOW"
+    print_warning "Required keys:"
+    print_warning "  - OPENAI_API_KEY or GEMINI_API_KEY (for LLM)"
+    print_warning "  - AZURE_SPEECH_KEY + AZURE_REGION (for STT, optional)"
     print_warning ""
-    print_warning "File location: $INSTALL_DIR/.env" "$YELLOW"
+    print_warning "File location: $INSTALL_DIR/.env"
 else
     print_success ".env file already exists"
 fi
@@ -243,10 +278,10 @@ fi
 
 print_step "Setting up database..."
 
-bun run db:push
+"$BUN_BIN" run db:push 2>&1 || { print_error "Database push failed"; exit 1; }
 print_success "Database schema created"
 
-bun run db:seed
+"$BUN_BIN" run db:seed 2>&1 || { print_error "Database seed failed"; exit 1; }
 print_success "Database seeded with initial data"
 
 # ============================================
@@ -256,39 +291,76 @@ print_success "Database seeded with initial data"
 print_step "Creating start scripts..."
 
 # Create start script
-cat > "$INSTALL_DIR/start.sh" << 'EOF'
+cat > "$INSTALL_DIR/start.sh" << 'STARTSCRIPT'
 #!/bin/bash
 cd "$(dirname "$0")"
 
+echo ""
 echo "🚀 Starting Meeting Copilot..."
+echo ""
 
-# Start realtime service in background
-cd mini-services/realtime-service
-bun run dev &
-REALTIME_PID=$!
-cd ../..
+# Check .env
+if [ ! -f ".env" ]; then
+    echo "⚠️  No .env file found!"
+    echo "📝 Creating from template..."
+    cp .env.example .env
+    echo "Please edit .env and add your API keys, then run ./start.sh again"
+    exit 1
+fi
 
-# Wait for realtime service to start
-sleep 2
+# Function to cleanup on exit
+cleanup() {
+    echo ""
+    echo "🛑 Stopping services..."
+    pkill -f "bun --hot" 2>/dev/null || true
+    echo "✓ Stopped"
+}
+trap cleanup EXIT
 
-# Start main application
+# Ensure bun is in PATH
+export PATH="$HOME/.bun/bin:$PATH"
+
+# Start realtime service
+echo "📡 Starting realtime service on port 3003..."
+if [ -d "mini-services/realtime-service" ]; then
+    cd mini-services/realtime-service
+    bun run dev &
+    cd ../..
+    sleep 2
+fi
+
+# Start main app
+echo "🌐 Starting Next.js on port 3000..."
+echo ""
+echo "═══════════════════════════════════════════════════════════"
+echo "  🎉 Meeting Copilot is running!"
+echo "═══════════════════════════════════════════════════════════"
+echo ""
+echo "  📱 App:        http://localhost:3000"
+echo "  🔌 WebSocket:  ws://localhost:3003"
+echo ""
+echo "  Test Accounts:"
+echo "    Admin: admin@meetingcopilot.com / admin123"
+echo "    Demo:  demo@meetingcopilot.com / demo123"
+echo ""
+echo "  Press Ctrl+C to stop"
+echo "═══════════════════════════════════════════════════════════"
+echo ""
+
 bun run dev
-
-# Cleanup on exit
-trap "kill $REALTIME_PID 2>/dev/null" EXIT
-EOF
-chmod +x "$INSTALL_DIR/start.sh"
+STARTSCRIPT
+chmod +x "$INSTALL_DIR/start.sh" 2>/dev/null || true
 
 # Create stop script
-cat > "$INSTALL_DIR/stop.sh" << 'EOF'
+cat > "$INSTALL_DIR/stop.sh" << 'STOPSCRIPT'
 #!/bin/bash
 echo "🛑 Stopping Meeting Copilot..."
 pkill -f "bun run dev" 2>/dev/null || true
-pkill -f "next dev" 2>/dev/null || true
 pkill -f "bun --hot" 2>/dev/null || true
+pkill -f "next dev" 2>/dev/null || true
 echo "✓ Meeting Copilot stopped"
-EOF
-chmod +x "$INSTALL_DIR/stop.sh"
+STOPSCRIPT
+chmod +x "$INSTALL_DIR/stop.sh" 2>/dev/null || true
 
 print_success "Start/stop scripts created"
 
@@ -304,23 +376,22 @@ print_msg "║                                                           ║" "$
 print_msg "╚═══════════════════════════════════════════════════════════╝" "$GREEN"
 echo ""
 
-print_msg "Installation directory: " "$CYAN"
+print_msg "📁 Installation directory: " "$CYAN"
 echo "$INSTALL_DIR"
 
 echo ""
-print_msg "Test Accounts:" "$CYAN"
+print_msg "👤 Test Accounts:" "$CYAN"
 echo "  Admin: admin@meetingcopilot.com / admin123"
 echo "  Demo:  demo@meetingcopilot.com / demo123"
 
 echo ""
-print_msg "Quick Start:" "$CYAN"
-echo "  1. cd $INSTALL_DIR"
-echo "  2. Edit .env and add your API keys"
-echo "  3. ./start.sh"
-echo "  4. Open http://localhost:3000 in your browser"
+print_msg "🚀 Quick Start:" "$CYAN"
+echo "  cd $INSTALL_DIR"
+echo "  nano .env        # Add your API keys"
+echo "  ./start.sh       # Start the app"
 
 echo ""
-print_msg "Commands:" "$CYAN"
+print_msg "📚 Commands:" "$CYAN"
 echo "  ./start.sh   - Start the application"
 echo "  ./stop.sh    - Stop the application"
 echo "  ./update.sh  - Update to latest version"

@@ -4,7 +4,7 @@
 # Meeting Copilot SaaS - Update Script
 # ============================================
 # Run this script to update to the latest version
-# Usage: curl -fsSL https://raw.githubusercontent.com/npavankumar03/interviewcopilot/master/update.sh | bash
+# Usage: cd meeting-copilot && ./update.sh
 
 set -e
 
@@ -21,23 +21,19 @@ print_msg() {
     echo -e "${2}${1}${NC}"
 }
 
-# Print step
 print_step() {
     echo ""
     print_msg "▶ $1" "$CYAN"
 }
 
-# Print success
 print_success() {
     print_msg "✓ $1" "$GREEN"
 }
 
-# Print error
 print_error() {
     print_msg "✗ $1" "$RED"
 }
 
-# Print warning
 print_warning() {
     print_msg "⚠ $1" "$YELLOW"
 }
@@ -50,97 +46,65 @@ clear
 echo ""
 print_msg "╔═══════════════════════════════════════════════════════════╗" "$BLUE"
 print_msg "║                                                           ║" "$BLUE"
-print_msg "║         🔄 Meeting Copilot SaaS - Updater                 ║" "$BLUE"
+print_msg "║         🔄 Meeting Copilot - Updater                      ║" "$BLUE"
 print_msg "║                                                           ║" "$BLUE"
 print_msg "╚═══════════════════════════════════════════════════════════╝" "$BLUE"
 echo ""
 
 # ============================================
-# FIND INSTALLATION DIRECTORY
+# FIND INSTALLATION
 # ============================================
 
-INSTALL_DIR="${INSTALL_DIR:-$HOME/meeting-copilot}"
+INSTALL_DIR="${INSTALL_DIR:-$(pwd)}"
 
-# Try to find installation directory
-if [ ! -d "$INSTALL_DIR/.git" ]; then
-    # Check common locations
-    for dir in "$HOME/meeting-copilot" "$HOME/interviewcopilot" "$HOME/copilot" "$(pwd)"; do
-        if [ -d "$dir/.git" ]; then
+# Check if we're in the right directory
+if [ ! -f "$INSTALL_DIR/package.json" ] || [ ! -d "$INSTALL_DIR/.git" ]; then
+    # Try common locations
+    for dir in "$HOME/meeting-copilot" "$HOME/interviewcopilot" "$(dirname "$0")"; do
+        if [ -f "$dir/package.json" ] && [ -d "$dir/.git" ]; then
             INSTALL_DIR="$dir"
             break
         fi
     done
 fi
 
-if [ ! -d "$INSTALL_DIR/.git" ]; then
+if [ ! -f "$INSTALL_DIR/package.json" ]; then
     print_error "Meeting Copilot installation not found!"
     echo ""
     echo "Please either:"
     echo "  1. Run this script from the installation directory"
-    echo "  2. Set INSTALL_DIR environment variable:"
-    echo "     INSTALL_DIR=/path/to/copilot ./update.sh"
-    echo ""
-    echo "Or run install.sh first:"
-    echo "  curl -fsSL https://raw.githubusercontent.com/npavankumar03/interviewcopilot/master/install.sh | bash"
+    echo "  2. Set INSTALL_DIR variable: INSTALL_DIR=/path/to/app ./update.sh"
     exit 1
 fi
 
-print_msg "Installation directory: " "$CYAN"
-echo "$INSTALL_DIR"
 cd "$INSTALL_DIR"
+print_msg "📁 Installation: $INSTALL_DIR" "$CYAN"
 
 # ============================================
-# CHECK FOR CHANGES
+# CHECK FOR UPDATES
 # ============================================
 
 print_step "Checking for updates..."
 
-# Fetch latest changes
-git fetch origin
+# Ensure bun is in PATH
+export PATH="$HOME/.bun/bin:$PATH"
 
-# Check if we're behind
-LOCAL=$(git rev-parse HEAD)
+# Fetch latest
+git fetch origin master 2>/dev/null || git fetch origin main 2>/dev/null || true
+
+LOCAL=$(git rev-parse HEAD 2>/dev/null)
 REMOTE=$(git rev-parse origin/master 2>/dev/null || git rev-parse origin/main 2>/dev/null)
 
 if [ "$LOCAL" = "$REMOTE" ]; then
     print_success "Already up to date!"
-    echo ""
-    print_msg "Current version: " "$CYAN"
     git log -1 --format="%h - %s (%cr)"
     exit 0
 fi
 
-# Check for uncommitted changes
-if ! git diff-index --quiet HEAD --; then
-    print_warning "You have uncommitted changes!"
-    echo ""
-    git status --short
-    echo ""
-    read -p "Stash changes and continue? (y/N): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        git stash push -m "Auto-stash before update at $(date)"
-        print_success "Changes stashed"
-        STASHED=true
-    else
-        print_error "Update cancelled"
-        exit 1
-    fi
-fi
-
-# ============================================
-# STOP SERVICES
-# ============================================
-
-print_step "Stopping running services..."
-
-# Kill any running processes
-pkill -f "bun run dev" 2>/dev/null || true
-pkill -f "next dev" 2>/dev/null || true
-pkill -f "bun --hot" 2>/dev/null || true
-
-sleep 1
-print_success "Services stopped"
+echo ""
+print_msg "New version available!" "$GREEN"
+git log --oneline $LOCAL..$REMOTE 2>/dev/null || git log --oneline -5
+echo ""
 
 # ============================================
 # BACKUP
@@ -148,31 +112,54 @@ print_success "Services stopped"
 
 print_step "Creating backup..."
 
-BACKUP_DIR="$INSTALL_DIR.backup.$(date +%Y%m%d_%H%M%S)"
-
-# Backup .env and database
+BACKUP_DIR="$INSTALL_DIR/.backup.$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$BACKUP_DIR"
+
 [ -f ".env" ] && cp ".env" "$BACKUP_DIR/"
-[ -d "db" ] && cp -r "db" "$BACKUP_DIR/"
-[ -f "prisma/dev.db" ] && cp "prisma/dev.db" "$BACKUP_DIR/" 2>/dev/null || true
+[ -d "db" ] && cp -r "db" "$BACKUP_DIR/" 2>/dev/null || true
 
-print_success "Backup created at $BACKUP_DIR"
+print_success "Backup saved to $BACKUP_DIR"
 
 # ============================================
-# PULL LATEST CHANGES
+# STOP SERVICES
 # ============================================
 
-print_step "Pulling latest changes..."
+print_step "Stopping services..."
 
-git pull origin master 2>/dev/null || git pull origin main
+pkill -f "bun run dev" 2>/dev/null || true
+pkill -f "bun --hot" 2>/dev/null || true
+pkill -f "next dev" 2>/dev/null || true
+
+sleep 1
+print_success "Services stopped"
+
+# ============================================
+# STASH CHANGES
+# ============================================
+
+STASHED=false
+if ! git diff-index --quiet HEAD -- 2>/dev/null; then
+    print_warning "Uncommitted changes detected, stashing..."
+    git stash push -m "Auto-stash before update $(date)"
+    STASHED=true
+fi
+
+# ============================================
+# PULL UPDATES
+# ============================================
+
+print_step "Pulling updates..."
+
+git pull origin master 2>/dev/null || git pull origin main 2>/dev/null || \
+    { print_error "Pull failed"; exit 1; }
 
 print_success "Code updated"
 
-# Show what changed
-echo ""
-print_msg "Changes:" "$CYAN"
-git log --oneline $LOCAL..HEAD 2>/dev/null || git log --oneline -5
-echo ""
+# Restore stashed changes
+if [ "$STASHED" = true ]; then
+    print_warning "Restoring stashed changes..."
+    git stash pop 2>/dev/null || print_warning "Could not restore stash"
+fi
 
 # ============================================
 # UPDATE DEPENDENCIES
@@ -180,57 +167,51 @@ echo ""
 
 print_step "Updating dependencies..."
 
-bun install
+BUN_BIN="$HOME/.bun/bin/bun"
+[ ! -f "$BUN_BIN" ] && BUN_BIN="bun"
+
+"$BUN_BIN" install 2>&1 || { print_error "Dependency update failed"; exit 1; }
 
 # Update realtime service
-cd mini-services/realtime-service
-bun install
-cd ../..
+if [ -d "mini-services/realtime-service" ]; then
+    cd mini-services/realtime-service
+    "$BUN_BIN" install 2>&1 || true
+    cd "$INSTALL_DIR"
+fi
 
 print_success "Dependencies updated"
 
 # ============================================
-# UPDATE DATABASE SCHEMA
+# UPDATE DATABASE
 # ============================================
 
-print_step "Updating database schema..."
+print_step "Updating database..."
 
-bun run db:push 2>/dev/null || true
+"$BUN_BIN" run db:push 2>&1 || true
 
 print_success "Database schema updated"
 
 # ============================================
-# RESTORE CONFIGURATION
+# RESTORE CONFIG
 # ============================================
 
-print_step "Restoring configuration..."
-
-# Restore .env if not present
-if [ ! -f ".env" ] && [ -f "$BACKUP_DIR/.env" ]; then
+if [ -f "$BACKUP_DIR/.env" ] && [ ! -f ".env" ]; then
     cp "$BACKUP_DIR/.env" ".env"
-    print_success ".env restored from backup"
-fi
-
-# Restore database if needed
-if [ -f "$BACKUP_DIR/custom.db" ] && [ ! -f "db/custom.db" ]; then
-    cp "$BACKUP_DIR/custom.db" "db/custom.db"
-    print_success "Database restored from backup"
+    print_success "Restored .env from backup"
 fi
 
 # ============================================
 # CLEANUP OLD BACKUPS
 # ============================================
 
-# Keep only last 5 backups
-BACKUP_COUNT=$(ls -d "$INSTALL_DIR".backup.* 2>/dev/null | wc -l)
-if [ "$BACKUP_COUNT" -gt 5 ]; then
-    print_step "Cleaning up old backups..."
-    ls -d "$INSTALL_DIR".backup.* | head -n -5 | xargs rm -rf
-    print_success "Old backups cleaned"
+# Keep only last 3 backups
+BACKUP_COUNT=$(ls -d "$INSTALL_DIR"/.backup.* 2>/dev/null | wc -l)
+if [ "$BACKUP_COUNT" -gt 3 ]; then
+    ls -dt "$INSTALL_DIR"/.backup.* | tail -n +4 | xargs rm -rf 2>/dev/null || true
 fi
 
 # ============================================
-# UPDATE COMPLETE
+# COMPLETE
 # ============================================
 
 echo ""
@@ -245,17 +226,5 @@ print_msg "Version: " "$CYAN"
 git log -1 --format="%h - %s (%cr)"
 echo ""
 
-print_msg "Backup saved to: " "$CYAN"
-echo "$BACKUP_DIR"
-
+print_msg "🚀 Ready to start: ./start.sh" "$GREEN"
 echo ""
-print_msg "Ready to start:" "$CYAN"
-echo "  cd $INSTALL_DIR && ./start.sh"
-echo ""
-
-# Pop stash if we stashed
-if [ "$STASHED" = true ]; then
-    print_warning "You have stashed changes. To restore them:"
-    echo "  git stash pop"
-    echo ""
-fi
