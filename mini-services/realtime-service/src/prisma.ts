@@ -1,23 +1,20 @@
 // Import Prisma client from the main project
-import { PrismaClient } from '../../../node_modules/@prisma/client';
-import { resolve } from 'path';
+// The DATABASE_URL must be set BEFORE importing PrismaClient
 
-// Compute absolute path to database from project root
-// When running from mini-services/realtime-service, we need to go up 2 levels
-const projectRoot = resolve(import.meta.dir, '../../../');
-const defaultDbPath = resolve(projectRoot, 'db/meeting-copilot.db');
+// Set default database URL if not provided
+if (!process.env.DATABASE_URL) {
+  // Compute absolute path relative to project root
+  const { resolve } = await import('path');
+  const { fileURLToPath } = await import('url');
+  const projectRoot = resolve(fileURLToPath(import.meta.url), '../../../..');
+  process.env.DATABASE_URL = `file:${projectRoot}/db/meeting-copilot.db`;
+}
 
-// Use environment variable or computed absolute path
-const databaseUrl = process.env.DATABASE_URL || `file:${defaultDbPath}`;
+console.log(`[realtime-service] Database: ${process.env.DATABASE_URL}`);
 
-console.log(`Database path: ${databaseUrl}`);
+// Now import PrismaClient after DATABASE_URL is set
+const { PrismaClient } = await import('@prisma/client');
 
-const prisma = new PrismaClient({
-  datasources: {
-    db: {
-      url: databaseUrl
-    }
-  }
-});
+const prisma = new PrismaClient();
 
 export default prisma;

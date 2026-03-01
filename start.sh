@@ -5,64 +5,70 @@
 # ============================================
 
 cd "$(dirname "$0")"
-
-# Ensure bun is in PATH
 export PATH="$HOME/.bun/bin:$PATH"
 
 echo ""
 echo "🚀 Starting Meeting Copilot..."
 echo ""
 
-# Check if .env exists
+# Check .env
 if [ ! -f ".env" ]; then
-    echo "⚠️  No .env file found. Creating from template..."
-    if [ -f ".env.example" ]; then
-        cp .env.example .env
-    else
-        echo "DATABASE_URL=\"file:./db/meeting-copilot.db\"" > .env
-    fi
-    echo "📝 Please edit .env and add your API keys, then run ./start.sh again"
-    echo ""
+    echo "⚠️  No .env file found!"
     exit 1
 fi
 
-# Create db directory if not exists
+# Create db directory
 mkdir -p db
 
-# Get absolute path to database
+# Set absolute database path
 DB_PATH="$(pwd)/db/meeting-copilot.db"
 export DATABASE_URL="file:$DB_PATH"
 
 echo "📁 Database: $DB_PATH"
 
-# Function to cleanup on exit
+# Check if database exists, if not create it
+if [ ! -f "$DB_PATH" ]; then
+    echo "📊 Database not found. Creating..."
+    bun run db:push
+    bun run db:seed
+    echo "✓ Database created"
+fi
+
+# Regenerate Prisma client to ensure it's up to date
+echo "🔧 Regenerating Prisma client..."
+bun run db:generate 2>/dev/null || true
+
+# Cleanup function
 cleanup() {
     echo ""
     echo "🛑 Stopping services..."
-    kill $(jobs -p) 2>/dev/null || true
+    pkill -f "bun --hot" 2>/dev/null || true
+    pkill -f "next dev" 2>/dev/null || true
     echo "✓ All services stopped"
 }
-
 trap cleanup EXIT
 
-# Start realtime service in background
+# Kill any existing processes on our ports
+pkill -f "next dev" 2>/dev/null || true
+pkill -f "bun --hot" 2>/dev/null || true
+sleep 1
+
+# Start realtime service
 echo "📡 Starting realtime service on port 3003..."
 cd mini-services/realtime-service
-bun --hot src/index.ts &
-REALTIME_PID=$!
+DATABASE_URL="file:$DB_PATH" bun --hot src/index.ts &
 cd ../..
-
-# Wait for realtime service to start
 sleep 3
 
-# Check if realtime service started
-if ! curl -s http://localhost:3003/health > /dev/null 2>&1; then
-    echo "⚠️  Realtime service may not have started correctly"
-    echo "   PID: $REALTIME_PID"
+# Check realtime service
+if curl -s http://localhost:3003/health > /dev/null 2>&1; then
+    echo "✓ Realtime service started"
+else
+    echo "⚠️  Realtime service may have issues (this is OK if no API keys configured)"
 fi
 
-# Start main application
-echo "🌐 Starting Next.js application on port 3000..."
+# Start main app
+echo "🌐 Starting Next.js on port 3000..."
 echo ""
 echo "═══════════════════════════════════════════════════════════"
 echo "  🎉 Meeting Copilot is running!"
@@ -70,7 +76,6 @@ echo "════════════════════════�
 echo ""
 echo "  📱 App:        http://localhost:3000"
 echo "  🔌 WebSocket:  ws://localhost:3003"
-echo "  📊 Health:     http://localhost:3000/api/health"
 echo ""
 echo "  Test Accounts:"
 echo "    Admin: admin@meetingcopilot.com / admin123"

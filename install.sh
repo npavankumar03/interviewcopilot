@@ -89,14 +89,9 @@ ok "Cloned to $INSTALL_DIR"
 # Enter directory
 cd "$INSTALL_DIR" || { err "Cannot enter $INSTALL_DIR"; exit 1; }
 
-# Debug - show what we got
-msg "Files in $(pwd):" "$Y"
-ls -la | head -20
-
 # Check package.json
 if [ ! -f "package.json" ]; then
-    err "package.json NOT FOUND in $(pwd)"
-    err "Clone may have failed"
+    err "package.json NOT FOUND"
     exit 1
 fi
 ok "Found package.json"
@@ -110,7 +105,6 @@ step "Installing dependencies..."
 BUN="$HOME/.bun/bin/bun"
 [ ! -f "$BUN" ] && BUN="bun"
 
-msg "Running: $BUN install" "$Y"
 "$BUN" install || { err "Install failed"; exit 1; }
 
 # Realtime service
@@ -133,12 +127,7 @@ mkdir -p db
 
 # Create .env if not exists
 if [ ! -f ".env" ]; then
-    # Check if .env.example exists
-    if [ -f ".env.example" ]; then
-        cp .env.example .env
-    else
-        # Create .env from scratch
-        cat > .env << 'ENVEOF'
+    cat > .env << 'ENVEOF'
 # Meeting Copilot SaaS - Environment Variables
 # Add your API keys below
 
@@ -156,33 +145,20 @@ OPENAI_MODEL="gpt-4o-mini"
 GEMINI_API_KEY="your-gemini-api-key"
 GEMINI_MODEL="gemini-2.0-flash"
 
-# Azure Speech Services (Required for voice features)
+# Azure Speech Services
 AZURE_SPEECH_KEY="your-azure-speech-key"
 AZURE_REGION="eastus"
 
 # Application Settings
 NEXT_PUBLIC_APP_URL="http://localhost:3000"
 NEXT_PUBLIC_APP_NAME="Meeting Copilot"
-
-# Logging
-LOG_LEVEL="info"
 ENVEOF
-    fi
-    
+
     # Generate JWT secret
     SECRET=$(openssl rand -hex 32 2>/dev/null || echo "secret-$(date +%s)")
-    sed -i "s/change-me-to-a-secure-random-string-in-production/$SECRET/" .env 2>/dev/null || \
-    sed -i '' "s/change-me-to-a-secure-random-string-in-production/$SECRET/" .env 2>/dev/null || true
+    sed -i "s/change-me-to-a-secure-random-string-in-production/$SECRET/" .env 2>/dev/null || true
     ok "Created .env"
 fi
-
-warn ""
-warn "═══════════════════════════════════════════════════════════"
-warn "  EDIT .env AND ADD YOUR API KEYS!"
-warn "═══════════════════════════════════════════════════════════"
-warn "  Required: OPENAI_API_KEY or GEMINI_API_KEY"
-warn "  Location: $INSTALL_DIR/.env"
-warn ""
 
 # ============================================
 # DATABASE
@@ -190,11 +166,9 @@ warn ""
 
 step "Setting up database..."
 
-# Create db directory (ensure it exists)
-mkdir -p db
-
-# Set absolute database path for Prisma
+# Set absolute database path
 export DATABASE_URL="file:$(pwd)/db/meeting-copilot.db"
+echo "Database: $DATABASE_URL"
 
 "$BUN" run db:push || { err "db:push failed"; exit 1; }
 ok "Schema created"
@@ -203,12 +177,11 @@ ok "Schema created"
 ok "Data seeded"
 
 # ============================================
-# START SCRIPTS
+# START SCRIPT
 # ============================================
 
-step "Creating start scripts..."
+step "Creating start script..."
 
-# Create start script with absolute paths
 cat > "$INSTALL_DIR/start.sh" << 'STARTEOF'
 #!/bin/bash
 cd "$(dirname "$0")"
@@ -220,7 +193,7 @@ echo ""
 
 # Check .env
 if [ ! -f ".env" ]; then
-    echo "⚠️  No .env file found!"
+    echo "⚠️  No .env file!"
     exit 1
 fi
 
@@ -229,21 +202,37 @@ mkdir -p db
 
 # Set absolute database path
 export DATABASE_URL="file:$(pwd)/db/meeting-copilot.db"
-echo "📁 Database: $(pwd)/db/meeting-copilot.db"
+echo "📁 Database: $DATABASE_URL"
+
+# Check if database exists
+if [ ! -f "db/meeting-copilot.db" ]; then
+    echo "📊 Creating database..."
+    bun run db:push
+    bun run db:seed
+fi
+
+# Regenerate Prisma client
+bun run db:generate 2>/dev/null || true
+
+# Kill existing processes
+pkill -f "next dev" 2>/dev/null || true
+pkill -f "bun --hot" 2>/dev/null || true
+sleep 1
 
 # Cleanup function
 cleanup() {
     echo ""
-    echo "🛑 Stopping services..."
-    kill $(jobs -p) 2>/dev/null || true
-    echo "✓ All services stopped"
+    echo "🛑 Stopping..."
+    pkill -f "bun --hot" 2>/dev/null || true
+    pkill -f "next dev" 2>/dev/null || true
+    echo "✓ Stopped"
 }
 trap cleanup EXIT
 
 # Start realtime service
 echo "📡 Starting realtime service on port 3003..."
 cd mini-services/realtime-service
-bun --hot src/index.ts &
+DATABASE_URL="$DATABASE_URL" bun --hot src/index.ts &
 cd ../..
 sleep 3
 
@@ -251,21 +240,16 @@ sleep 3
 echo "🌐 Starting Next.js on port 3000..."
 echo ""
 echo "═══════════════════════════════════════════════════════════"
-echo "  🎉 Running at http://localhost:3000"
+echo "  🎉 Meeting Copilot is running!"
+echo "═══════════════════════════════════════════════════════════"
+echo "  📱 http://localhost:3000"
 echo "  📧 admin@meetingcopilot.com / admin123"
 echo "═══════════════════════════════════════════════════════════"
 bunx next dev -p 3000
 STARTEOF
 
-cat > "$INSTALL_DIR/stop.sh" << 'EOF'
-#!/bin/bash
-pkill -f "next dev" 2>/dev/null || true
-pkill -f "bun --hot" 2>/dev/null || true
-echo "✓ Stopped"
-EOF
-
-chmod +x "$INSTALL_DIR/start.sh" "$INSTALL_DIR/stop.sh" 2>/dev/null || true
-ok "Scripts created"
+chmod +x "$INSTALL_DIR/start.sh"
+ok "Start script created"
 
 # ============================================
 # DONE
@@ -279,8 +263,8 @@ echo ""
 
 msg "📁 Directory: $INSTALL_DIR" "$C"
 echo ""
-msg "🚀 Start:" "$C"
+msg "🚀 To start:" "$C"
 echo "  cd $INSTALL_DIR"
-echo "  nano .env    # Add API keys"
+echo "  nano .env    # Add your API keys"
 echo "  ./start.sh"
 echo ""
