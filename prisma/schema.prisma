@@ -1,0 +1,260 @@
+// This is your Prisma schema file,
+// Meeting Copilot SaaS - Production Schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// AUTH & USERS
+// ============================================
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  passwordHash  String
+  role          String   @default("user") // "user" | "admin"
+  status        String   @default("active") // "active" | "disabled"
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  lastLoginAt   DateTime?
+
+  profile       UserProfile?
+  sessions      Session[]
+  uploads       Upload[]
+  creditsLedger CreditsLedger[]
+  subscriptions Subscription[]
+  auditLogs     AuditLog[] @relation("ActorAuditLogs")
+
+  @@index([email])
+  @@index([role])
+}
+
+model UserProfile {
+  userId         String   @id
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fullName       String?
+  headline       String?
+  roleTitles     String? // JSON array of role titles
+  techStack      String? // JSON array of technologies
+  achievements   String? // JSON array of achievements
+  projects       String? // JSON array of project descriptions
+  resumeText     String? // Extracted resume text
+  updatedAt      DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// ============================================
+// SESSIONS & TRANSCRIPTS
+// ============================================
+
+model Session {
+  id                String   @id @default(cuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title             String?
+  type              String   @default("meeting") // "interview" | "sales" | "trivia" | "meeting" | "custom"
+  status            String   @default("active") // "active" | "ended"
+  responseStyle     String   @default("short") // "short" | "star" | "detailed" | "technical" | "custom"
+  customStylePrompt String?
+  createdAt         DateTime @default(now())
+  endedAt           DateTime?
+
+  transcriptTurns      TranscriptTurn[]
+  assistantMessages    AssistantMessage[]
+  uploads              Upload[]
+  conversationSummary  ConversationSummary?
+  llmMetrics           LlmMetric[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model TranscriptTurn {
+  id        String   @id @default(cuid())
+  sessionId String
+  session   Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  seq       Int      // Sequence number for ordering
+  source    String   // "partial" | "final"
+  text      String
+  confidence Float?
+  createdAt DateTime @default(now())
+
+  @@index([sessionId])
+  @@index([sessionId, seq])
+}
+
+model AssistantMessage {
+  id           String   @id @default(cuid())
+  sessionId    String
+  session      Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  requestId    String   @unique // Unique request identifier
+  questionText String
+  tier         String   // "t0" | "t1"
+  answerText   String
+  model        String?
+  provider     String?
+  createdAt    DateTime @default(now())
+
+  @@index([sessionId])
+  @@index([requestId])
+}
+
+model ConversationSummary {
+  sessionId   String   @id
+  session     Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  summaryText String
+  updatedAt   DateTime @updatedAt
+
+  @@index([sessionId])
+}
+
+// ============================================
+// UPLOADS & RETRIEVAL
+// ============================================
+
+model Upload {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessionId     String?
+  session       Session? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  filename      String
+  mime          String
+  storageUrl    String?  // Path to stored file
+  extractedText String?  // Extracted text content
+  createdAt     DateTime @default(now())
+
+  retrievalChunks RetrievalChunk[]
+
+  @@index([userId])
+  @@index([sessionId])
+}
+
+model RetrievalChunk {
+  id         String   @id @default(cuid())
+  uploadId   String
+  upload     Upload   @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+  chunkIndex Int
+  chunkText  String
+  embedding  String?  // JSON array of embedding vector (or use pgvector in Postgres)
+  createdAt  DateTime @default(now())
+
+  @@index([uploadId])
+}
+
+// ============================================
+// BILLING & CREDITS
+// ============================================
+
+model CreditsLedger {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  delta     Int      // Positive for credit, negative for debit
+  reason    String   // "purchase" | "usage" | "refund" | "admin_adjust"
+  meta      String?  // JSON metadata
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model Plan {
+  id              String   @id @default(cuid())
+  name            String   @unique
+  priceCents      Int
+  creditsPerUnit  Int
+  createdAt       DateTime @default(now())
+
+  subscriptions Subscription[]
+}
+
+model Subscription {
+  id                    String   @id @default(cuid())
+  userId                String
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  planId                String
+  plan                  Plan     @relation(fields: [planId], references: [id])
+  status                String   @default("active") // "active" | "canceled" | "past_due"
+  provider              String   @default("stripe")
+  providerCustomerId    String?
+  providerSubscriptionId String?
+  currentPeriodEnd      DateTime?
+  createdAt             DateTime @default(now())
+
+  @@index([userId])
+  @@index([status])
+}
+
+// ============================================
+// ADMIN SETTINGS
+// ============================================
+
+model ApiSetting {
+  key            String   @id // "openai_api_key", "gemini_api_key", "azure_speech_key", "azure_region"
+  encryptedValue String   // AES-GCM encrypted value
+  updatedAt      DateTime @updatedAt
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  actorUserId String?
+  actor       User?    @relation("ActorAuditLogs", fields: [actorUserId], references: [id], onDelete: SetNull)
+  action      String
+  targetType  String?
+  targetId    String?
+  meta        String?  // JSON metadata
+  createdAt   DateTime @default(now())
+
+  @@index([actorUserId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+// ============================================
+// METRICS
+// ============================================
+
+model LlmMetric {
+  id             String   @id @default(cuid())
+  sessionId      String?
+  session        Session? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  requestId      String
+  provider       String
+  model          String
+  ttftMs         Int?     // Time to first token in milliseconds
+  totalMs        Int?     // Total response time
+  promptTokens   Int?
+  completionTokens Int?
+  suppressReason String?  // Reason for suppression if any
+  createdAt      DateTime @default(now())
+
+  @@index([sessionId])
+  @@index([requestId])
+  @@index([createdAt])
+}
+
+// ============================================
+// SESSION STATE (for orchestrator)
+// ============================================
+
+model SessionState {
+  id                    String   @id @default(cuid())
+  sessionId             String   @unique
+  state                 String   @default("LISTENING") // "LISTENING" | "CANDIDATE" | "STREAMING_T0" | "REFINE_T1" | "DONE"
+  lastQuestionFingerprint String?
+  lastQuestionTime      DateTime?
+  activeRequestId       String?
+  recentAssistantOutputs String? // JSON array of recent outputs for feedback loop detection
+  updatedAt             DateTime @updatedAt
+
+  @@index([sessionId])
+}
